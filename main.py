@@ -259,12 +259,8 @@ async def root():
             "capture": "POST /capture - Capture a tweet screenshot",
             "health": "GET /health - Health check",
             "docs": "GET /docs - API documentation"
-        },
-        "environment": {
-            "minio_endpoint": MINIO_ENDPOINT,
-            "minio_bucket": MINIO_BUCKET,
-            "minio_secure": MINIO_SECURE
         }
+        
     }
 
 if __name__ == "__main__":

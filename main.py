@@ -249,11 +249,22 @@ async def capture_tweet(
         )
 
 @app.get("/")
-async def root():   
+async def root():
     """Root endpoint with API information"""
     return {
         "name": "TweetCapture API",
+        "version": "1.0.0",
+        "description": "API for capturing tweet screenshots and storing them in MinIO",
+        "endpoints": {
+            "capture": "POST /capture - Capture a tweet screenshot",
+            "health": "GET /health - Health check",
+            "docs": "GET /docs - API documentation"
         },
+        "environment": {
+            "minio_endpoint": MINIO_ENDPOINT,
+            "minio_bucket": MINIO_BUCKET,
+            "minio_secure": MINIO_SECURE
+        }
     }
 
 if __name__ == "__main__":

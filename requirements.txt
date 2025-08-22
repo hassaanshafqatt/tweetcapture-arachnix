@@ -1,0 +1,15 @@
+selenium>=4.0.0
+webdriver-manager>=3.8.5
+packaging
+Pillow>=9.3.0
+
+
+# FastAPI and related dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+# MinIO client
+minio>=7.2.0
+
+# Additional utilities
+python-multipart>=0.0.6

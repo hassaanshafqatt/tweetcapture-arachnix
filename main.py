@@ -151,18 +151,11 @@ async def startup_event():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint"""
-    minio_status = "healthy"
-    try:
-        # Test MinIO connection
-        minio_client.bucket_exists(MINIO_BUCKET)
-    except Exception as e:
-        minio_status = f"unhealthy: {str(e)}"
     
-    return HealthResponse(
+    
+        return HealthResponse(
         status="healthy",
-        timestamp=datetime.now(),
-        minio_status=minio_status
+        timestamp=datetime.now()
     )
 
 @app.post("/capture", response_model=TweetCaptureResponse)

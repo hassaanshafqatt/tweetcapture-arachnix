@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     environment:
       # MinIO Configuration (use existing MinIO, don’t start a new one)
-      - MINIO_ENDPOINT=93.127.128.111:9000
+      - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=Arachnix@2025
       - MINIO_BUCKET=tweets-screenshots

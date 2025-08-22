@@ -67,7 +67,6 @@ class TweetCaptureResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     timestamp: datetime
-    minio_status: str
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'localhost:9000')

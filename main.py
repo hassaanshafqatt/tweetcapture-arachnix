@@ -130,26 +130,30 @@ def get_dominant_color(image: Image.Image) -> tuple:
 def process_for_instagram(
     image_path: str,
     output_path: str,
-    size: int = 1080,
+    size_w: int = 1080,
+    size_h: int = 1350,
     has_media: bool = False,
     crop_top: int = 10
 ):
     """
     Process image for Instagram:
-    - If tweet has media → keep aspect ratio, resize max width 1080.
-    - If no media → crop crop_top px from top, then square 1080x1080 with dominant background color.
+    - Resize all tweets (media & non-media) to fit into 4:5 ratio (1080x1350).
+    - Non-media tweets are cropped from the top by crop_top pixels before resizing.
+    - Background filled with dominant color when padding is needed.
     """
     img = Image.open(image_path).convert("RGBA")
 
     if has_media:
-        # Keep aspect ratio, max width 1080
-        w, h = img.size
-        if w > size:
-            new_h = int(h * (size / w))
-            img_resized = img.resize((size, new_h), Image.LANCZOS)
-        else:
-            img_resized = img
-        img_resized.save(output_path, "PNG", optimize=True, dpi=(300, 300))
+        # Resize with padding to 1080x1350
+        fg_fit = ImageOps.contain(img, (size_w, size_h), Image.LANCZOS)
+        dominant_color = get_dominant_color(img)
+        bg = Image.new("RGBA", (size_w, size_h), dominant_color + (255,))
+
+        fg_w, fg_h = fg_fit.size
+        off = ((size_w - fg_w) // 2, (size_h - fg_h) // 2)
+        bg.paste(fg_fit, off, mask=fg_fit.split()[3] if fg_fit.mode == "RGBA" else None)
+
+        bg.save(output_path, "PNG", optimize=True, dpi=(300, 300))
         return output_path
 
     # ---- Non-media tweets ----
@@ -157,14 +161,13 @@ def process_for_instagram(
     crop_box = (0, crop_top, w, h) if crop_top < h else (0, 0, w, h)
     cropped = img.crop(crop_box)
 
-    # Resize with padding to 1080x1080
-    fg_fit = ImageOps.contain(cropped, (size, size), Image.LANCZOS)
+    # Resize with padding to 1080x1350
+    fg_fit = ImageOps.contain(cropped, (size_w, size_h), Image.LANCZOS)
     dominant_color = get_dominant_color(cropped)
-    bg = Image.new("RGBA", (size, size), dominant_color + (255,))
+    bg = Image.new("RGBA", (size_w, size_h), dominant_color + (255,))
 
     fg_w, fg_h = fg_fit.size
-    off = ((size - fg_w) // 2, (size - fg_h) // 2)
-
+    off = ((size_w - fg_w) // 2, (size_h - fg_h) // 2)
     bg.paste(fg_fit, off, mask=fg_fit.split()[3] if fg_fit.mode == "RGBA" else None)
 
     bg.save(output_path, "PNG", optimize=True, dpi=(300, 300))
@@ -235,7 +238,8 @@ async def capture_tweet(request: TweetCaptureRequest, background_tasks: Backgrou
         process_for_instagram(
             result_path,
             final_file_path,
-            size=1080,
+            size_w=1080,
+            size_h=1350,
             has_media=has_media,
             crop_top=request.crop_top
         )

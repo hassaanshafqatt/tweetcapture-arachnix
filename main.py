@@ -12,7 +12,8 @@ import logging
 from minio import Minio
 from minio.error import S3Error
 from tweetcapture import TweetCapture
-from PIL import Image  # <-- NEW
+from PIL import Image, ImageOps
+from collections import Counter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +37,7 @@ class TweetCaptureRequest(BaseModel):
     radius: int = Field(default=15, description="Image radius")
     scale: float = Field(default=1.0, ge=0.1, le=14.0, description="Screenshot scale")
     wait_time: float = Field(default=5.0, ge=1.0, le=10.0, description="Page loading wait time")
-    
+
     # Media hiding options
     hide_photos: bool = Field(default=False)
     hide_videos: bool = Field(default=False)
@@ -44,10 +45,13 @@ class TweetCaptureRequest(BaseModel):
     hide_quotes: bool = Field(default=False)
     hide_link_previews: bool = Field(default=False)
     hide_all_medias: bool = Field(default=False)
-    
+
     # Optional custom filename (without extension)
     filename: Optional[str] = None
-    
+
+    # Crop amount for non-media tweets
+    crop_top: int = Field(default=10, ge=0, description="Pixels to crop from the top for non-media tweets")
+
     @validator('url')
     def validate_tweet_url(cls, v):
         if not v.startswith(('https://twitter.com/', 'https://x.com/')):
@@ -102,12 +106,12 @@ def generate_filename(tweet_url: str, custom_filename: Optional[str] = None) -> 
     import re
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if custom_filename:
-        return f"{custom_filename}_{timestamp}_{str(uuid.uuid4())[:8]}.jpg"
+        return f"{custom_filename}_{timestamp}_{str(uuid.uuid4())[:8]}.png"
     match = re.search(r'\/(\w+)\/status\/(\d+)', tweet_url)
     if match:
         username, tweet_id = match.groups()
-        return f"@{username}_{tweet_id}_{timestamp}.jpg"
-    return f"tweet_{timestamp}_{str(uuid.uuid4())[:8]}.jpg"
+        return f"@{username}_{tweet_id}_{timestamp}.png"
+    return f"tweet_{timestamp}_{str(uuid.uuid4())[:8]}.png"
 
 async def cleanup_temp_file(file_path: str):
     try:
@@ -115,6 +119,56 @@ async def cleanup_temp_file(file_path: str):
             os.remove(file_path)
     except Exception as e:
         logger.warning(f"Failed to clean up {file_path}: {e}")
+
+# ------------------ Image Processing ------------------
+def get_dominant_color(image: Image.Image) -> tuple:
+    img = image.convert("RGB")
+    pixels = list(img.getdata())
+    most_common = Counter(pixels).most_common(1)[0][0]
+    return most_common
+
+def process_for_instagram(
+    image_path: str,
+    output_path: str,
+    size: int = 1080,
+    has_media: bool = False,
+    crop_top: int = 10
+):
+    """
+    Process image for Instagram:
+    - If tweet has media → keep aspect ratio, resize max width 1080.
+    - If no media → crop crop_top px from top, then square 1080x1080 with dominant background color.
+    """
+    img = Image.open(image_path).convert("RGBA")
+
+    if has_media:
+        # Keep aspect ratio, max width 1080
+        w, h = img.size
+        if w > size:
+            new_h = int(h * (size / w))
+            img_resized = img.resize((size, new_h), Image.LANCZOS)
+        else:
+            img_resized = img
+        img_resized.save(output_path, "PNG", optimize=True, dpi=(300, 300))
+        return output_path
+
+    # ---- Non-media tweets ----
+    w, h = img.size
+    crop_box = (0, crop_top, w, h) if crop_top < h else (0, 0, w, h)
+    cropped = img.crop(crop_box)
+
+    # Resize with padding to 1080x1080
+    fg_fit = ImageOps.contain(cropped, (size, size), Image.LANCZOS)
+    dominant_color = get_dominant_color(cropped)
+    bg = Image.new("RGBA", (size, size), dominant_color + (255,))
+
+    fg_w, fg_h = fg_fit.size
+    off = ((size - fg_w) // 2, (size - fg_h) // 2)
+
+    bg.paste(fg_fit, off, mask=fg_fit.split()[3] if fg_fit.mode == "RGBA" else None)
+
+    bg.save(output_path, "PNG", optimize=True, dpi=(300, 300))
+    return output_path
 
 # ------------------ FastAPI Events ------------------
 @app.on_event("startup")
@@ -134,10 +188,8 @@ async def capture_tweet(request: TweetCaptureRequest, background_tasks: Backgrou
     final_file_path = None
     
     try:
-        # Generate MinIO filename
         object_name = generate_filename(request.url, request.filename)
 
-        # Temporary PNG path
         temp_dir = tempfile.gettempdir()
         temp_file_path = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}.png")
 
@@ -170,19 +222,23 @@ async def capture_tweet(request: TweetCaptureRequest, background_tasks: Backgrou
         logger.info(f"Capturing screenshot: {request.url}")
         result_path = await tweet_capture.screenshot(request.url, temp_file_path)
 
-        # ------------------ Fix Aspect Ratio ------------------
-        im = Image.open(result_path)
-        width, height = im.size
-        rs = max(width, height)
-        size = (rs, rs)
-        background_color = (0, 0, 0)
-        fit_image = Image.new("RGB", size, background_color)
-        offset = ((rs - width) // 2, (rs - height) // 2)
-        fit_image.paste(im, offset)
+        # Decide if tweet has media
+        has_media = not request.hide_all_medias and (
+            not request.hide_photos or
+            not request.hide_videos or
+            not request.hide_gifs or
+            not request.hide_quotes or
+            not request.hide_link_previews
+        )
 
-        # Save as JPG (Instagram-friendly, smaller than PNG)
-        final_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}.jpg")
-        fit_image.save(final_file_path, "JPEG", quality=95)
+        final_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}.png")
+        process_for_instagram(
+            result_path,
+            final_file_path,
+            size=1080,
+            has_media=has_media,
+            crop_top=request.crop_top
+        )
 
         # Upload to MinIO
         file_url = upload_to_minio(final_file_path, object_name)
@@ -219,7 +275,7 @@ async def root():
     return {
         "name": "TweetCapture API",
         "version": "1.0.0",
-        "description": "Capture tweets, fix aspect ratio, and upload to MinIO",
+        "description": "Capture tweets, adjust for Instagram, and upload to MinIO",
         "endpoints": {
             "capture": "POST /capture",
             "health": "GET /health",
